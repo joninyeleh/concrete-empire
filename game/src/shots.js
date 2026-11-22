@@ -1,4 +1,4 @@
-// Screenshot staging behind ?shot=start|play|drive|mission. Each scene plays the
+// Screenshot staging behind ?shot=start|play|drive|mission|race|night. Each scene plays the
 // real rules forward from a fresh world under a simple autopilot (steer toward the
 // mission marker, or cruise the road ahead), so the frame is what a short game
 // really looks like — and the same seed always gives the same frame.
@@ -101,8 +101,8 @@ function putPlayerInCar(game, car) {
 }
 
 /**
- * Set `game` to the named scene (start, play, drive or mission) and leave it
- * playing under the autopilot, so the screenshot catches a live moment.
+ * Set `game` to the named scene (start, play, drive, mission, race or night)
+ * and leave it playing under the autopilot, so the screenshot catches a live moment.
  */
 export function stageShot(name, game) {
   const rng = game.rng;
@@ -110,8 +110,10 @@ export function stageShot(name, game) {
   const world = game.world;
   const p = world.player;
 
-  if (name !== 'play' && name !== 'drive' && name !== 'mission') {
-    // Title: four seconds of the living city behind the neon logo.
+  if (name !== 'play' && name !== 'drive' && name !== 'mission' && name !== 'race' && name !== 'night') {
+    // Title: four seconds of the living city behind the neon logo, deep at night.
+    game.time = 170;
+    world.time = 170;
     game.screen = 'title';
     for (let i = 0; i < 4 / STEP; i += 1) game.stepTitle(STEP);
     return;
@@ -149,8 +151,51 @@ export function stageShot(name, game) {
     return;
   }
 
+  if (name === 'race') {
+    // Midnight Grand Prix, mid-race: Vic in Rosa's lent Comet on the start line,
+    // three rivals ahead, the first checkpoint lit. Staged at night.
+    game.time = 150;
+    world.time = 150;
+    game.startMission(5);
+    game.missionDelay = 0;
+    // No briefing box in the shot: the race should read, not the text.
+    game.dialogue = null;
+    game.dialogueQueue = [];
+    putPlayerInCar(game, game.raceCar);
+    // The race is already on: the player is on the line, so the flag drops now.
+    game.mission.step = 'racing';
+    game.mission.cpIndex = 0;
+    const first = game.mission.checkpoints[0];
+    game.mission.target = { x: first.x, y: first.y, label: first.label };
+    game.mission.objective = `Checkpoint 1/${game.mission.total} — ${first.label}`;
+    for (const rival of game.mission.rivals) rival.waiting = false;
+    game.missionTimer = 150;
+    simulate(game, 2.0);
+    return;
+  }
+
+  if (name === 'night') {
+    // Night drive through Downtown: headlights, streetlights, two stars up and
+    // two cop cars closing in from behind.
+    game.time = 170;
+    world.time = 170;
+    const car = makeCar(rng, 'sport', roadLine(1), roadLine(3), 0, 'none');
+    car.color = '#d42a2a';
+    world.cars.push(car);
+    putPlayerInCar(game, car);
+    for (let i = 0; i < 2; i += 1) {
+      const cop = makeCar(rng, 'police', car.x - 480 - i * 150, roadLine(3), 0, 'cop');
+      world.cars.push(cop);
+    }
+    game.setWanted(2);
+    simulate(game, 2.0);
+    return;
+  }
+
   // Mission: mid-heist at Empire Bank — Vic is standing in the vault marker,
-  // the crack is almost done, and the objective is on screen.
+  // the crack is almost done, and the objective is on screen. Staged at night.
+  game.time = 170;
+  world.time = 170;
   game.startMission(4);
   game.missionDelay = 0;
   const bank = placeApproach('bank');

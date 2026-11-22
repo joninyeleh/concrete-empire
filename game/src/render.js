@@ -4,8 +4,8 @@
 // wash and a vignette. No assets — every pixel is drawn from the state.
 
 import {
-  BLOCK, CAR, COLORS, GRID, PLACES, ROAD, VIEW, WORLD_H, WORLD_W,
-  blockAt, districtAt, placeCenter, roadLine,
+  BLOCK, COLORS, GRID, PLACES, ROAD, VIEW, WORLD_H, WORLD_W,
+  blockAt, carDims, districtAt, nightLevel, placeCenter, roadLine,
 } from './config.js';
 import { clamp } from './random.js';
 
@@ -150,7 +150,7 @@ export function createRenderer(canvas) {
     }
   }
 
-  function drawBuildings(game) {
+  function drawBuildings(game, night) {
     const cam = game.camera;
     const x0 = cam.x - 60;
     const y0 = cam.y - 60;
@@ -175,23 +175,25 @@ export function createRenderer(canvas) {
           }
         }
       }
-      // Downtown towers carry a neon sign on their south face.
+      // Downtown towers carry a neon sign on their south face — brighter at night.
       const block = blockAt(b.x + b.w / 2, b.y + b.h / 2);
       if (block && districtAt(block.col, block.row) === 'downtown' && hash2(b.x, b.y) < 0.55) {
         const neon = COLORS.neon[Math.floor(hash2(b.y, b.x) * COLORS.neon.length)];
         const sx = b.x + b.w / 2 - 4;
         const sy = b.y + b.h - 6;
+        const glow = 0.10 + 0.28 * night;
         context.fillStyle = neon;
-        context.globalAlpha = 0.16;
+        context.globalAlpha = glow;
         context.fillRect(sx - 6, sy - 4, 20, 14);
-        context.globalAlpha = 0.45;
+        context.globalAlpha = glow * 2.4;
         context.fillRect(sx - 2, sy - 2, 12, 10);
         context.globalAlpha = 1;
         context.fillRect(sx, sy, 8, 6);
       }
     }
-    // Streetlights at intersections: a small pole and a pool of light.
-    context.fillStyle = 'rgba(255,214,120,0.07)';
+    // Streetlights at intersections: a pole, a lamp, and a pool of light that
+    // grows as the night deepens.
+    context.fillStyle = `rgba(255,214,120,${0.05 + 0.22 * night})`;
     for (let i = 0; i <= 6; i += 1) {
       for (let j = 0; j <= 6; j += 1) {
         const cx = roadLine(i);
@@ -200,6 +202,20 @@ export function createRenderer(canvas) {
         context.beginPath();
         context.arc(cx + ROAD / 2 - 4, cy - ROAD / 2 + 4, 44, 0, Math.PI * 2);
         context.fill();
+      }
+    }
+    context.fillStyle = '#3a3f47';
+    for (let i = 0; i <= 6; i += 1) {
+      for (let j = 0; j <= 6; j += 1) {
+        const cx = roadLine(i);
+        const cy = roadLine(j);
+        if (cx < x0 || cx > x1 || cy < y0 || cy > y1) continue;
+        context.fillRect(cx + ROAD / 2 - 6, cy - ROAD / 2 - 8, 4, 16);
+        context.fillStyle = `rgba(255,230,150,${0.35 + 0.65 * night})`;
+        context.beginPath();
+        context.arc(cx + ROAD / 2 - 4, cy - ROAD / 2 - 8, 4, 0, Math.PI * 2);
+        context.fill();
+        context.fillStyle = '#3a3f47';
       }
     }
   }
@@ -295,49 +311,101 @@ export function createRenderer(canvas) {
     context.fillRect(x - 3, y - 130, 6, 130);
   }
 
-  function drawCar(car, time) {
+  function drawCar(car, time, night) {
     context.save();
     context.translate(car.x, car.y);
     context.rotate(car.angle);
-    // Headlight cone: dusk driving reads better with one.
-    context.fillStyle = 'rgba(255,220,130,0.07)';
+    const dims = carDims(car.kind);
+    const len = dims.length;
+    const wid = dims.width;
+    // Headlight cone: brighter as the night deepens.
+    context.fillStyle = `rgba(255,220,130,${0.04 + 0.14 * night})`;
     context.beginPath();
-    context.moveTo(CAR.length / 2, -8);
-    context.lineTo(CAR.length / 2 + 95, -26);
-    context.lineTo(CAR.length / 2 + 95, 26);
-    context.lineTo(CAR.length / 2, 8);
+    context.moveTo(len / 2, -8);
+    context.lineTo(len / 2 + 95, -26);
+    context.lineTo(len / 2 + 95, 26);
+    context.lineTo(len / 2, 8);
     context.closePath();
     context.fill();
+    if (car.kind === 'bike') {
+      // Two wheels, a frame, and a rider leaning forward.
+      context.strokeStyle = '#1c1a14';
+      context.lineWidth = 3;
+      context.beginPath();
+      context.arc(-10, 0, 6, 0, Math.PI * 2);
+      context.arc(10, 0, 6, 0, Math.PI * 2);
+      context.stroke();
+      context.strokeStyle = car.hp <= 0 ? '#3a3a3a' : car.color;
+      context.lineWidth = 3;
+      context.beginPath();
+      context.moveTo(-10, 0);
+      context.lineTo(2, -6);
+      context.lineTo(10, 0);
+      context.moveTo(2, -6);
+      context.lineTo(6, -9);
+      context.stroke();
+      context.fillStyle = '#e8c39a';
+      context.beginPath();
+      context.arc(4, -10, 4, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = '#ffe9a8';
+      context.fillRect(len / 2 - 2, -2, 3, 4);
+      context.restore();
+      return;
+    }
     // Body, roof, windshield, rear window.
     context.fillStyle = 'rgba(0,0,0,0.35)';
-    roundRect(-CAR.length / 2 + 3, -CAR.width / 2 + 3, CAR.length, CAR.width, 7);
+    roundRect(-len / 2 + 3, -wid / 2 + 3, len, wid, 7);
     context.fill();
     context.fillStyle = car.hp <= 0 ? '#3a3a3a' : car.color;
-    roundRect(-CAR.length / 2, -CAR.width / 2, CAR.length, CAR.width, 7);
+    roundRect(-len / 2, -wid / 2, len, wid, 7);
     context.fill();
     context.fillStyle = 'rgba(0,0,0,0.28)';
-    roundRect(-6, -CAR.width / 2 + 3, 14, CAR.width - 6, 4);
+    roundRect(-6, -wid / 2 + 3, 14, wid - 6, 4);
     context.fill();
     context.fillStyle = '#bcd6e8';
-    context.fillRect(CAR.length / 2 - 13, -CAR.width / 2 + 4, 5, CAR.width - 8);
-    context.fillRect(-CAR.length / 2 + 5, -CAR.width / 2 + 4, 4, CAR.width - 8);
+    context.fillRect(len / 2 - 13, -wid / 2 + 4, 5, wid - 8);
+    context.fillRect(-len / 2 + 5, -wid / 2 + 4, 4, wid - 8);
     // Headlights and tail lights.
     context.fillStyle = '#ffe9a8';
-    context.fillRect(CAR.length / 2 - 2, -CAR.width / 2 + 2, 3, 4);
-    context.fillRect(CAR.length / 2 - 2, CAR.width / 2 - 6, 3, 4);
+    context.fillRect(len / 2 - 2, -wid / 2 + 2, 3, 4);
+    context.fillRect(len / 2 - 2, wid / 2 - 6, 3, 4);
     context.fillStyle = '#ff3b30';
-    context.fillRect(-CAR.length / 2 - 1, -CAR.width / 2 + 2, 3, 4);
-    context.fillRect(-CAR.length / 2 - 1, CAR.width / 2 - 6, 3, 4);
+    context.fillRect(-len / 2 - 1, -wid / 2 + 2, 3, 4);
+    context.fillRect(-len / 2 - 1, wid / 2 - 6, 3, 4);
     if (car.kind === 'police') {
       const phase = Math.floor(time * 6 + car.flash) % 2 === 0;
       context.fillStyle = phase ? COLORS.policeLightA : COLORS.policeLightB;
-      context.fillRect(-4, -CAR.width / 2 + 2, 8, 5);
+      context.fillRect(-4, -wid / 2 + 2, 8, 5);
       context.fillStyle = phase ? COLORS.policeLightB : COLORS.policeLightA;
-      context.fillRect(-4, CAR.width / 2 - 7, 8, 5);
+      context.fillRect(-4, wid / 2 - 7, 8, 5);
     }
     if (car.kind === 'taxi') {
       context.fillStyle = '#20242c';
-      context.fillRect(-8, -CAR.width / 2 - 2, 10, 4);
+      context.fillRect(-8, -wid / 2 - 2, 10, 4);
+    }
+    context.restore();
+  }
+
+  /** A striped barricade across the road where the police sealed the street. */
+  function drawRoadblock(game) {
+    const rb = game.roadblock;
+    if (!rb) return;
+    context.save();
+    context.translate(rb.x, rb.y);
+    context.rotate(rb.vertical ? 0 : Math.PI / 2);
+    // The bar runs across the road: yellow with black chevrons.
+    context.fillStyle = '#e8c33a';
+    context.fillRect(-42, -6, 84, 12);
+    context.fillStyle = '#1c1a14';
+    for (let x = -42; x < 42; x += 14) {
+      context.beginPath();
+      context.moveTo(x, -6);
+      context.lineTo(x + 7, -6);
+      context.lineTo(x + 14, 6);
+      context.lineTo(x + 7, 6);
+      context.closePath();
+      context.fill();
     }
     context.restore();
   }
@@ -467,6 +535,10 @@ export function createRenderer(canvas) {
     if (game.batTimer > 0) {
       text(`BAT ${Math.ceil(game.batTimer)}s`, 20, 120, 15, '#e8c98a', 'left', true);
     }
+    // The radio station, when one is playing.
+    if (game.radioStation) {
+      text(`RADIO — ${game.radioStation}`, 20, VIEW.h - 40, 14, '#7be0e8', 'left', true);
+    }
   }
 
   function drawMinimap(game) {
@@ -566,7 +638,7 @@ export function createRenderer(canvas) {
       if (age > 2.2) continue;
       context.globalAlpha = age < 1.6 ? 1 : 1 - (age - 1.6) / 0.6;
       text(p.text, VIEW.w / 2, y - age * 26, 20, p.color, 'center', true);
-      y += 0;
+      y += 28; // stacked popups step down instead of printing on top of each other
     }
     context.globalAlpha = 1;
   }
@@ -672,8 +744,8 @@ export function createRenderer(canvas) {
     const y = 520;
     text('ENTER — New Game', VIEW.w / 2, y, 22, '#ffffff', 'center', true);
     if (game.saveExists) text('C — Continue your empire', VIEW.w / 2, y + 36, 22, '#7be495', 'center', true);
-    text('WASD move · Shift sprint · E enter / steal car · J punch · P pause · M mute', VIEW.w / 2, y + 84, 15, 'rgba(255,255,255,0.55)', 'center', false);
-    text('5 jobs · Wanted 0–5 stars · Progress saves on this machine', VIEW.w / 2, y + 110, 15, 'rgba(255,255,255,0.55)', 'center', false);
+    text('WASD move · Shift sprint · E enter / steal car · J punch · P pause · M mute · R radio', VIEW.w / 2, y + 84, 15, 'rgba(255,255,255,0.55)', 'center', false);
+    text('7 jobs · Wanted 0–5 stars · Night racing · Progress saves on this machine', VIEW.w / 2, y + 110, 15, 'rgba(255,255,255,0.55)', 'center', false);
   }
 
   function drawPanel(title, lines, prompt, accent) {
@@ -702,18 +774,20 @@ export function createRenderer(canvas) {
     const shakeX = game.shake > 0 ? (Math.random() - 0.5) * game.shake : 0;
     const shakeY = game.shake > 0 ? (Math.random() - 0.5) * game.shake : 0;
     context.setTransform(view.scale, 0, 0, view.scale, view.x - game.camera.x * view.scale + shakeX * view.scale, view.y - game.camera.y * view.scale + shakeY * view.scale);
+    const night = nightLevel(game.time);
     drawGround(game);
-    drawBuildings(game);
+    drawBuildings(game, night);
     drawSkids(game);
     drawPickups(game);
     drawMarker(game);
-    for (const car of game.world.cars) drawCar(car, game.time);
+    for (const car of game.world.cars) drawCar(car, game.time, night);
+    drawRoadblock(game);
     for (const ped of game.world.peds) drawPed(ped, game.time);
     drawPlayer(game);
     drawParticles(game);
-    // Dusk wash over the world, then the vignette in screen space.
+    // Dusk wash over the world — it deepens as the night cycle turns.
     context.fillStyle = COLORS.duskSky;
-    context.globalAlpha = 0.16;
+    context.globalAlpha = 0.14 + 0.34 * night;
     context.fillRect(game.camera.x - 20, game.camera.y - 20, VIEW.w + 40, VIEW.h + 40);
     context.globalAlpha = 1;
     context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
@@ -748,10 +822,10 @@ export function createRenderer(canvas) {
     } else if (game.screen === SCREEN_DONE) {
       context.fillStyle = 'rgba(8,10,16,0.6)';
       context.fillRect(0, 0, VIEW.w, VIEW.h);
-      drawPanel('EMPIRE BOSS', [`All five jobs done. Velmora is yours, ${game.cash.toLocaleString('en-US')} richer.`, 'Rosa pours two drinks. One of them is yours.'], 'Enter — keep running the city (free roam)', COLORS.marker);
+      drawPanel('EMPIRE BOSS', [`All seven jobs done. Velmora is yours, ${game.cash.toLocaleString('en-US')} richer.`, 'Rosa pours two drinks. One of them is yours.'], 'Enter — keep running the city (free roam)', COLORS.marker);
     }
     if (game.showControls) {
-      text('WASD move · Shift sprint · E enter / steal car · J punch · Space handbrake · P pause · M mute', 20, VIEW.h - 16, 14, 'rgba(255,255,255,0.5)', 'left', false);
+      text('WASD move · Shift sprint · E enter / steal car · J punch · Space handbrake · P pause · M mute · R radio', 20, VIEW.h - 16, 14, 'rgba(255,255,255,0.5)', 'left', false);
     }
   }
 

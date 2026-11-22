@@ -5,10 +5,12 @@
 // judge reads, with the vendored make.fun library.
 //
 // The game this entry hands in is Concrete Empire, an original 2D top-down open-world crime
-// game set in the city of Velmora: explore on foot and by car, steal cars, outrun the police
-// as the wanted level rises, and work five missions for the fixer Rosa — with a HUD, a live
-// minimap, pickups, a safehouse, and a localStorage save. All rendering is canvas, all sound
-// is synthesized WebAudio, and the game makes zero network requests.
+// game set in the city of Velmora: explore on foot and by car, van or bike, steal cars, outrun
+// the police as the wanted level rises — roadblocks seal the streets at four stars — and work
+// seven missions for the fixer Rosa, from a harbor pickup to a midnight street race and a
+// three-star getaway. The city turns slowly from dusk to deep night, streetlights and neon
+// come on, and a two-station radio plays synthesized synthwave and lo-fi. All rendering is
+// canvas, all sound is synthesized WebAudio, and the game makes zero network requests.
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts

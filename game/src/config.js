@@ -1,8 +1,20 @@
 // Concrete Empire — tuning, city layout, palette and mission definitions.
 // All numbers are in world pixels; the view is 1280x720 and the camera follows the player.
 
+import { smoothstep } from './random.js';
+
 export const VIEW = { w: 1280, h: 720 };
 export const STEP = 1 / 60;
+
+// ---- Day / night -----------------------------------------------------------
+// One slow cycle: dusk at t=0, deep night halfway through, dusk again at the end.
+// The renderer reads this every frame for the wash, streetlights and neon.
+export const NIGHT_CYCLE_SECONDS = 360;
+/** 0 = dusk, 1 = deep night, for a given game time in seconds. */
+export function nightLevel(time) {
+  const phase = (time % NIGHT_CYCLE_SECONDS) / NIGHT_CYCLE_SECONDS;
+  return smoothstep(0, 0.5, phase) * (1 - smoothstep(0.5, 1, phase));
+}
 
 // ---- City grid -------------------------------------------------------------
 export const BLOCK = 320; // side of one city block, in pixels
@@ -126,6 +138,8 @@ export const COLORS = {
     taxi: ['#e8c33a'],
     sport: ['#d42a2a', '#1f9d55', '#e8e8e8'],
     truck: ['#8a8f96'],
+    van: ['#7a7a80', '#5a6e8a', '#8a7a5a'],
+    bike: ['#d42a2a', '#e8e8e8', '#1f9d55'],
     police: ['#20242c'],
   },
   policeLightA: '#ff2e2e',
@@ -160,9 +174,25 @@ export const CAR = {
   steer: 2.7, // radians per second at full lock, scaled by speed
   grip: 5.2, // how fast sideways velocity bleeds off (lower = more drift)
   handbrakeGrip: 1.4,
-  maxSpeed: { sedan: 520, taxi: 500, sport: 660, truck: 400, police: 610 },
+  maxSpeed: { sedan: 520, taxi: 500, sport: 660, truck: 400, van: 430, bike: 720, police: 610 },
   damageOnHit: 14,
 };
+
+/** Per-kind driving feel. The van is slow and planted; the bike is quick and twitchy. */
+export const CAR_STATS = {
+  sedan: { accel: 430, maxSpeed: 520, grip: 5.2, steer: 2.7, length: 46, width: 22 },
+  taxi: { accel: 430, maxSpeed: 500, grip: 5.2, steer: 2.7, length: 46, width: 22 },
+  sport: { accel: 470, maxSpeed: 660, grip: 5.6, steer: 2.9, length: 46, width: 22 },
+  truck: { accel: 360, maxSpeed: 400, grip: 5.6, steer: 2.2, length: 54, width: 24 },
+  van: { accel: 330, maxSpeed: 430, grip: 6.0, steer: 2.2, length: 56, width: 24 },
+  bike: { accel: 560, maxSpeed: 720, grip: 7.5, steer: 3.6, length: 34, width: 14 },
+  police: { accel: 450, maxSpeed: 610, grip: 5.4, steer: 2.8, length: 46, width: 22 },
+};
+/** Drawn body size for a car kind. */
+export function carDims(kind) {
+  const s = CAR_STATS[kind] || CAR_STATS.sedan;
+  return { length: s.length, width: s.width };
+}
 
 // ---- Traffic & pedestrians -------------------------------------------------
 export const TRAFFIC_COUNT = 14;
@@ -176,6 +206,27 @@ export const WANTED_UNSEEN_SECONDS = 10; // unseen this long before stars start 
 export const WANTED_DECAY_SECONDS = 6; // one star per this many unseen seconds
 export const BUSTED_HOLD_SECONDS = 1.2; // a cop must hold the player this long to bust them
 export const SIGHT_RANGE = 380; // cops and witnesses notice crimes inside this range
+
+// ---- Police roadblocks -----------------------------------------------------
+export const ROADBLOCK_MIN_WANTED = 4; // roadblocks appear at this many stars
+export const ROADBLOCK_AHEAD = 520; // how far ahead of the player the block is set
+export const ROADBLOCK_RESPAWN_SECONDS = 20; // wait before a new block after one clears
+
+// ---- In-game radio ---------------------------------------------------------
+// Two stations, both synthesized live with WebAudio oscillators — no audio files.
+export const RADIO_STATIONS = [
+  { name: 'NEON DRIVE 104.7', kind: 'synthwave' },
+  { name: 'VELMORA LO-FI 88.3', kind: 'lofi' },
+];
+
+// ---- Street race -----------------------------------------------------------
+// Start line at the Downtown showroom, then four checkpoints and a finish at Rosa's.
+export const RACE_START_PLACE = 'sportsCar';
+export const RACE_CHECKPOINT_PLACES = ['harborPickup', 'bank', 'safehouse', 'park'];
+export const RACE_FINISH_PLACE = 'rosasBar';
+export const RACE_TIME_LIMIT = 150;
+export const RACE_RIVAL_SPEED = 0.88; // rivals drive at 88% of sport top speed
+export const RACE_RIVALS = ['Rico', 'Dana', 'Mo'];
 
 // ---- Missions --------------------------------------------------------------
 export const MISSIONS = [
@@ -231,6 +282,27 @@ export const MISSIONS = [
     brief: 'ROSA: Last one. Empire Bank, the vault, five seconds of nerve. Then every cop in the city will want you — get to the Safehouse and we are rich.',
     objective: 'Reach Empire Bank and crack the vault',
     objectiveReturn: 'Escape to the Safehouse with the money',
+  },
+  {
+    id: 'streetrace',
+    title: 'Midnight Grand Prix',
+    reward: 1200,
+    type: 'race',
+    place: 'sportsCar',
+    timeLimit: RACE_TIME_LIMIT,
+    brief: 'ROSA: Rico, Dana and Mo are racing the whole city tonight and the pot is fat. I lent you a Comet at the showroom. Get to the start line, then beat them through four checkpoints to my bar. Lose and you walk home.',
+    objective: 'Get to the start line — Downtown Showroom',
+  },
+  {
+    id: 'getaway',
+    title: 'Getaway Driver',
+    reward: 1500,
+    type: 'getaway',
+    place: 'garage',
+    returnPlace: 'safehouse',
+    brief: 'ROSA: My crew is holed up at the Greasy Wrench Garage and the PD is already circling. Pick them up, then shake three stars and bring them to the Safehouse. Do not bring the cops to my door — lose them first.',
+    objective: "Pick up Rosa's crew at the Greasy Wrench Garage",
+    objectiveReturn: 'Lose the heat, then reach the Safehouse',
   },
 ];
 

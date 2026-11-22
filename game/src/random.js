@@ -51,6 +51,12 @@ export function clamp(v, min, max) {
   return v < min ? min : v > max ? max : v;
 }
 
+/** Smooth 0→1 interpolation between `edge0` and `edge1` (Hermite). */
+export function smoothstep(edge0, edge1, x) {
+  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
 /** Distance between two points. */
 export function dist(ax, ay, bx, by) {
   const dx = bx - ax;

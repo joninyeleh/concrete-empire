@@ -4,9 +4,9 @@
 // The player itself lives in main.js; this file moves the rest of the world.
 
 import {
-  BLOCK, CAR, CAR_MAX_HP, COLS, COLORS, GRID, PED_COUNT, PED_SPEED, ROAD, ROWS,
-  SIGHT_RANGE, TRAFFIC_COUNT, TRAFFIC_SPEED, WORLD_H, WORLD_W, blockAt, districtAt,
-  placeCenter, roadLine,
+  BLOCK, CAR, CAR_MAX_HP, CAR_STATS, COLS, COLORS, GRID, PED_COUNT, PED_SPEED,
+  RACE_RIVAL_SPEED, ROAD, ROWS, SIGHT_RANGE, TRAFFIC_COUNT, TRAFFIC_SPEED,
+  WORLD_H, WORLD_W, blockAt, carDims, districtAt, placeCenter, roadLine,
 } from './config.js';
 import { angleDiff, clamp, dist, pick, range, rangeInt } from './random.js';
 
@@ -183,11 +183,17 @@ export function makeCar(random, kind, x, y, angle, driver) {
     skidPrev: null,
     speed: kind === 'police' ? TRAFFIC_SPEED + 60 : range(random, TRAFFIC_SPEED - 30, TRAFFIC_SPEED + 30),
     color: kind === 'police' ? COLORS.car.police[0] : pick(random, palette),
-    driver, // 'traffic' | 'player' | 'cop' | 'none'
+    driver, // 'traffic' | 'player' | 'cop' | 'none' | 'race' | 'block'
     target: null,
     dirIndex: 0,
     stuck: 0,
     flash: 0, // police lightbar phase
+    // Street-race rivals: the next checkpoint they are driving to, or null.
+    raceTarget: null,
+    waiting: false, // a rival waits at the start line until the player arrives
+    cpIndex: 0,
+    finished: false,
+    roadblock: false, // part of a police roadblock: parked across the road
   };
 }
 
@@ -352,6 +358,72 @@ function stepCopCar(world, car, dt) {
   }
 }
 
+// ---- Street-race rivals ----------------------------------------------------
+
+// A rival drives the checkpoints on the road grid, Manhattan-style: first to
+// the vertical road nearest the car, then along it to the target's horizontal
+// road, then to the target — so it follows streets instead of cutting through
+// buildings. It waits at the start line until the player arrives.
+function stepRaceCar(world, car, dt) {
+  if (car.driver !== 'race' || car.waiting || !car.raceTarget || car.finished) return;
+  const t = car.raceTarget;
+  // Pick the vertical road that makes the whole route shortest, so a rival
+  // never takes a needless detour — or a U-turn — at the start line.
+  let xv = roadLine(0);
+  let best = Infinity;
+  for (let i = 0; i <= COLS; i += 1) {
+    const cand = roadLine(i);
+    const cost = Math.abs(car.x - cand) + Math.abs(t.x - cand);
+    if (cost < best) { best = cost; xv = cand; }
+  }
+  let wx;
+  let wy;
+  if (Math.abs(car.x - xv) > 40) {
+    wx = xv; wy = car.y;
+  } else if (Math.abs(car.y - t.y) > 40) {
+    wx = xv; wy = t.y;
+  } else {
+    wx = t.x; wy = t.y;
+  }
+  const desired = Math.atan2(wy - car.y, wx - car.x);
+  const turn = angleDiff(car.angle, desired);
+  car.angle += clamp(turn, -2.6 * dt, 2.6 * dt);
+  // Slow down for hard turns, so the car stays on the road instead of
+  // cutting corners through buildings. Facing away from the waypoint, it
+  // turns almost in place instead of driving off the road.
+  const slow = 1 - Math.min(1, Math.abs(turn) / 1.2) * 0.65;
+  let speed = CAR_STATS.sport.maxSpeed * RACE_RIVAL_SPEED * slow;
+  if (Math.abs(turn) > 2.4) speed *= 0.25;
+  // Stuck recovery: if the car barely moved over half a second, back out and turn.
+  const moved = dist(car.x, car.y, car.lx === undefined ? car.x : car.lx, car.ly === undefined ? car.y : car.ly);
+  car.lx = car.x;
+  car.ly = car.y;
+  car.distAcc = (car.distAcc || 0) + moved;
+  car.timeAcc = (car.timeAcc || 0) + dt;
+  if (car.timeAcc >= 0.5) {
+    car.stuckNow = car.distAcc < 40;
+    car.distAcc = 0;
+    car.timeAcc = 0;
+  }
+  if (car.stuckNow) {
+    car.x -= Math.cos(car.angle) * 220 * dt;
+    car.y -= Math.sin(car.angle) * 220 * dt;
+    car.angle += 1.6 * dt;
+  } else {
+    car.x += Math.cos(car.angle) * speed * dt;
+    car.y += Math.sin(car.angle) * speed * dt;
+  }
+  car.flash += dt;
+  car.x = clamp(car.x, 20, WORLD_W - 20);
+  car.y = clamp(car.y, 20, WORLD_H - 20);
+  // Rivals do not drive through buildings: slide back out and turn when stuck.
+  if (hitsBuilding(world.city, car.x, car.y, 18)) {
+    car.x -= Math.cos(car.angle) * speed * dt * 2;
+    car.y -= Math.sin(car.angle) * speed * dt * 2;
+    car.angle += 0.9 * dt;
+  }
+}
+
 function stepCopPed(world, ped, dt) {
   if (ped.state === 'down') {
     stepDownPed(world, ped, dt);
@@ -379,7 +451,10 @@ function collideCars(world) {
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const d = Math.sqrt(dx * dx + dy * dy);
-      const min = 34;
+      // A bike is shorter than a sedan, so it gets a tighter collision bubble.
+      const da = carDims(a.kind);
+      const db = carDims(b.kind);
+      const min = (Math.max(da.length, da.width) + Math.max(db.length, db.width)) / 2 * 0.75;
       if (d === 0 || d >= min) continue;
       const push = (min - d) / 2;
       const nx = dx / d;
@@ -526,6 +601,7 @@ function killCar(world, car) {
 // ---- Player car physics ----------------------------------------------------
 
 export function stepPlayerCar(world, car, input, dt) {
+  const stats = CAR_STATS[car.kind] || CAR_STATS.sedan;
   const fx = Math.cos(car.angle);
   const fy = Math.sin(car.angle);
   let forward = car.vx * fx + car.vy * fy;
@@ -534,13 +610,13 @@ export function stepPlayerCar(world, car, input, dt) {
   // Steering: full lock turns the car faster when it is moving; reversing flips it.
   const speedFactor = clamp(Math.abs(forward) / 220, 0, 1);
   const steerDir = forward < -5 ? -1 : 1;
-  car.angle += move.x * CAR.steer * speedFactor * steerDir * dt * (input.handbrake() ? 1.5 : 1);
-  if (move.y < 0) forward += CAR.accel * dt;
-  else if (move.y > 0) forward -= (forward > 0 ? CAR.brake : CAR.accel * 0.6) * dt;
+  car.angle += move.x * stats.steer * speedFactor * steerDir * dt * (input.handbrake() ? 1.5 : 1);
+  if (move.y < 0) forward += stats.accel * dt;
+  else if (move.y > 0) forward -= (forward > 0 ? CAR.brake : stats.accel * 0.6) * dt;
   else forward -= forward * 0.6 * dt; // coast
-  const max = CAR.maxSpeed[car.kind] || CAR.maxSpeed.sedan;
+  const max = stats.maxSpeed;
   forward = clamp(forward, -CAR.reverseMax, max);
-  const grip = input.handbrake() ? CAR.handbrakeGrip : CAR.grip;
+  const grip = input.handbrake() ? CAR.handbrakeGrip : stats.grip;
   lateral *= Math.max(0, 1 - grip * dt);
   const nfx = Math.cos(car.angle);
   const nfy = Math.sin(car.angle);
@@ -563,7 +639,7 @@ export function stepPlayerCar(world, car, input, dt) {
   } else {
     car.skidPrev = null;
   }
-  const moved = moveCircle(world.city, car.x, car.y, car.vx * dt, car.vy * dt, 18);
+  const moved = moveCircle(world.city, car.x, car.y, car.vx * dt, car.vy * dt, car.kind === 'bike' ? 12 : 18);
   if (moved.blocked && speed > 120) {
     world.events |= EVENT_CRASH;
     const damage = (speed - 120) / 9;
@@ -620,6 +696,8 @@ export function stepWorld(world, input, dt) {
   for (const car of world.cars) {
     if (car.driver === 'player') stepPlayerCar(world, car, input, dt);
     else if (car.driver === 'cop') stepCopCar(world, car, dt);
+    else if (car.driver === 'race') stepRaceCar(world, car, dt);
+    // 'block' cars are parked roadblock pieces: they never move on their own.
     else if (car.driver === 'traffic') stepTrafficCar(world, car, dt);
   }
   for (const ped of world.peds) {
@@ -665,7 +743,7 @@ export function populate(world, clearX, clearY) {
       point = randomRoadPoint(rng);
       tries += 1;
     }
-    const kind = pick(rng, ['sedan', 'sedan', 'sedan', 'taxi', 'sport', 'truck']);
+    const kind = pick(rng, ['sedan', 'sedan', 'sedan', 'taxi', 'sport', 'truck', 'van', 'bike']);
     // A traffic car faces along its road, never across it.
     const vertical = roadOrientation(point.x, point.y) === 'v';
     const dirIndex = vertical ? pick(rng, [1, 3]) : pick(rng, [0, 2]);
@@ -685,7 +763,7 @@ export function populate(world, clearX, clearY) {
     const angle = vertical ? (rng() < 0.5 ? -Math.PI / 2 : Math.PI / 2) : (rng() < 0.5 ? 0 : Math.PI);
     const off = vertical ? { x: 30, y: 0 } : { x: 0, y: 30 };
     const side = rng() < 0.5 ? 1 : -1;
-    const car = makeCar(rng, pick(rng, ['sedan', 'sedan', 'taxi', 'sport']), point.x + off.x * side, point.y + off.y * side, angle, 'none');
+    const car = makeCar(rng, pick(rng, ['sedan', 'sedan', 'taxi', 'sport', 'van', 'bike']), point.x + off.x * side, point.y + off.y * side, angle, 'none');
     car.speed = 0;
     world.cars.push(car);
   }

@@ -1,20 +1,23 @@
 // Concrete Empire — boot, the one loop, and the rules that tie the world together:
-// the player on foot and in cars, the wanted level and the police, the five jobs
-// from Rosa, cash and the things it buys, pickups, saving, juice and sound.
+// the player on foot and in cars, vans and bikes, the wanted level and the police,
+// the seven jobs from Rosa, cash and the things it buys, pickups, saving, juice and sound.
 //
-// ?seed=N fixes the city. ?shot=start|play|drive|mission (with &seed=N) stages
+// ?seed=N fixes the city. ?shot=start|play|drive|mission|race|night (with &seed=N) stages
 // that scene instead of running the loop, keeps it playing under an autopilot,
 // and sets window.__shotReady for a screenshot.
 
 import {
   BLOCK, CAR, CAR_MAX_HP, CITY_NAME, GRID, MISSIONS, NEAR_MISS, PICKUPS, PLACES,
-  PLAYER, ROAD, SAVE_KEY, STEP, STORY, VIEW, WANTED_DECAY_SECONDS, WANTED_MAX,
-  WANTED_UNSEEN_SECONDS, BUSTED_HOLD_SECONDS, SIGHT_RANGE, placeApproach, placeCenter, roadLine,
+  PLAYER, RADIO_STATIONS, RACE_CHECKPOINT_PLACES, RACE_FINISH_PLACE, RACE_RIVALS,
+  RACE_START_PLACE, ROAD, ROADBLOCK_AHEAD, ROADBLOCK_MIN_WANTED,
+  ROADBLOCK_RESPAWN_SECONDS, SAVE_KEY, STEP, STORY, VIEW, WANTED_DECAY_SECONDS,
+  WANTED_MAX, WANTED_UNSEEN_SECONDS, BUSTED_HOLD_SECONDS, SIGHT_RANGE, nightLevel,
+  placeApproach, placeCenter, roadLine,
 } from './config.js';
 import { createRandom, clamp, dist, pick, range, rangeInt, angleDiff } from './random.js';
 import {
   ACTION_BUY, ACTION_CONFIRM, ACTION_ENTER, ACTION_MUTE, ACTION_PAUSE, ACTION_PUNCH,
-  createInput,
+  ACTION_RADIO, createInput,
 } from './input.js';
 import {
   EVENT_CAR_DEAD, EVENT_COP_TOUCH, EVENT_CRASH, EVENT_PED_DOWN, addParticles,
@@ -47,6 +50,10 @@ function createAudio() {
   let engineOsc = null;
   let engineGain = null;
   let muted = false;
+  // Radio state: -1 = off, 0/1 = station. radioNext/radioStep drive the sequencer.
+  let radioIndex = -1;
+  let radioNext = 0;
+  let radioStep = 0;
 
   function ensure() {
     if (ctx) return true;
@@ -95,6 +102,20 @@ function createAudio() {
     filter.connect(gain);
     gain.connect(master);
     src.start();
+  }
+  /** One radio note at an absolute context time (the sequencer schedules ahead). */
+  function radioNote(freq, at, dur, type, vol) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(vol, at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, at + dur);
+    osc.connect(gain);
+    gain.connect(master);
+    osc.start(at);
+    osc.stop(at + dur + 0.05);
   }
   return {
     unlock() {
@@ -166,8 +187,54 @@ function createAudio() {
       engineOsc.frequency.value = 52 + speed01 * 95;
       engineGain.gain.setTargetAtTime(0.02 + speed01 * 0.02, ctx.currentTime, 0.1);
     },
+    /** In-game radio: two stations, sequenced live with oscillators — no audio files. */
+    radioTick() {
+      if (radioIndex < 0 || muted || !ensure() || ctx.state === 'suspended') return;
+      if (radioNext < ctx.currentTime) radioNext = ctx.currentTime + 0.05;
+      const station = RADIO_STATIONS[radioIndex];
+      while (radioNext < ctx.currentTime + 0.25) {
+        const at = radioNext;
+        if (station.kind === 'synthwave') {
+          radioNote(SYNTH_BASS[radioStep % 8], at, 0.2, 'square', 0.045);
+          if (radioStep % 2 === 0) radioNote(SYNTH_ARP[radioStep % 8], at, 0.18, 'triangle', 0.03);
+          if (radioStep % 4 === 0) radioNote(55, at, 0.12, 'sine', 0.09); // kick-ish thump
+        } else {
+          const chord = LOFI_CHORDS[Math.floor(radioStep / 4) % 4];
+          if (radioStep % 4 === 0) {
+            for (const f of chord) radioNote(f, at, 0.8, 'sine', 0.035);
+          }
+          if (radioStep % 8 === 6) radioNote(chord[2] * 2, at, 0.3, 'triangle', 0.025);
+        }
+        radioStep += 1;
+        radioNext += RADIO_STEP_SECONDS;
+      }
+    },
+    /** Cycle off → station 1 → station 2 → off. Returns the station name or null. */
+    toggleRadio() {
+      radioIndex += 1;
+      if (radioIndex >= RADIO_STATIONS.length) radioIndex = -1;
+      radioStep = 0;
+      radioNext = 0;
+      return radioIndex < 0 ? null : RADIO_STATIONS[radioIndex].name;
+    },
+    radioStation() {
+      return radioIndex < 0 ? null : RADIO_STATIONS[radioIndex].name;
+    },
   };
 }
+
+// ---- Radio note data (module scope so the audio closure stays small) --------
+const RADIO_STEP_SECONDS = 0.214; // eighth notes at ~140 BPM
+// Synthwave: an A-minor bass pulse with a bright arp on top.
+const SYNTH_BASS = [110, 110, 130.81, 164.81, 110, 98, 146.83, 164.81];
+const SYNTH_ARP = [440, 523.25, 659.25, 523.25, 440, 329.63, 392, 523.25];
+// Lo-fi: Am7 – Fmaj7 – Cmaj7 – G6 chord stabs, one chord per bar of four steps.
+const LOFI_CHORDS = [
+  [110, 130.81, 164.81, 196],
+  [87.31, 130.81, 164.81, 220],
+  [130.81, 164.81, 196, 246.94],
+  [98, 146.83, 196, 246.94],
+];
 
 // ---- Game ------------------------------------------------------------------
 
@@ -209,9 +276,15 @@ export function createGame(seed) {
     controlsTimer: 0,
     saveExists: false,
     muted: false,
+    roadblock: null, // active police roadblock, if any (wanted 4+)
+    roadblockCooldown: 0,
+    raceCar: null, // the Comet Rosa lends for the street race
+    radioStation: null, // name of the station playing, or null
     story: STORY,
     shotMode: null,
   };
+  /** 0 = dusk, 1 = deep night — the renderer and the tests read this. */
+  game.night01 = () => nightLevel(game.time);
 
   // Spawn points on sidewalks, clear of traffic: the bar's corner, and the hospital corner.
   const SPAWN_BAR = { x: roadLine(1) + 20, y: roadLine(4) - 116 };
@@ -275,6 +348,24 @@ export function createGame(seed) {
     return car;
   }
 
+  function spawnVan() {
+    // A work van parked on the road south of the Greasy Wrench Garage.
+    const c = placeCenter('garage');
+    const van = makeCar(rng, 'van', c.x, roadLine(5), 0, 'none');
+    van.speed = 0;
+    world.cars.push(van);
+    return van;
+  }
+
+  function spawnBike() {
+    // A bike parked on the road south of Riverside Park, facing along the road.
+    const p = placeApproach('park');
+    const bike = makeCar(rng, 'bike', p.x, p.y, 0, 'none');
+    bike.speed = 0;
+    world.cars.push(bike);
+    return bike;
+  }
+
   function spawnPickup() {
     const roll = rng();
     const kind = roll < 0.45 ? 'cash' : roll < 0.7 ? 'health' : roll < 0.85 ? 'armor' : 'bat';
@@ -311,12 +402,17 @@ export function createGame(seed) {
     game.prompt = null;
     game.pickupTimer = PICKUPS.respawnSeconds;
     game.inSafehouse = false;
+    game.roadblock = null;
+    game.roadblockCooldown = 0;
+    game.raceCar = null;
     game.screen = SCREEN_TITLE;
     game.shake = 0;
     const bar = placeCenter('rosasBar');
     spawnPlayerAt(SPAWN_BAR.x, SPAWN_BAR.y);
     populate(world, world.player.x, world.player.y);
     spawnSportsCar();
+    spawnVan();
+    spawnBike();
     for (let i = 0; i < PICKUPS.startCount; i += 1) spawnPickup();
     // The camera starts over Downtown for the title backdrop.
     game.camera.x = clamp(placeCenter('bank').x - VIEW.w / 2, 0, 2592 - VIEW.w);
@@ -460,6 +556,53 @@ export function createGame(seed) {
   }
   game.setWanted = setWanted;
 
+  // ---- Police roadblocks ---------------------------------------------------
+
+  function spawnRoadblock() {
+    const pos = nearestPlayerPos();
+    const p = world.player;
+    const heading = p.inCar ? p.inCar.angle : p.angle;
+    const point = snapToRoad(pos.x + Math.cos(heading) * ROADBLOCK_AHEAD, pos.y + Math.sin(heading) * ROADBLOCK_AHEAD);
+    // Which way does this road run? A point on a vertical road shares a roadLine x.
+    let vertical = false;
+    for (let i = 0; i <= 6; i += 1) {
+      if (Math.abs(point.x - roadLine(i)) < 1) { vertical = true; break; }
+    }
+    // Two cop cars parked across the road, nose to nose with the player.
+    const cars = [];
+    const angle = vertical ? Math.PI / 2 : 0;
+    const offsets = vertical ? [{ x: -26, y: 0 }, { x: 26, y: 0 }] : [{ x: 0, y: -26 }, { x: 0, y: 26 }];
+    for (const o of offsets) {
+      const car = makeCar(rng, 'police', point.x + o.x, point.y + o.y, angle, 'block');
+      car.roadblock = true;
+      car.speed = 0;
+      world.cars.push(car);
+      cars.push(car);
+    }
+    const ped = makePed(rng, point.x, point.y, 'cop');
+    ped.roadblock = true;
+    world.peds.push(ped);
+    game.roadblock = { x: point.x, y: point.y, vertical, cars, ped };
+    popup('ROADBLOCK AHEAD — the PD sealed the street!', '#ff8a7a');
+  }
+
+  function clearRoadblock() {
+    if (!game.roadblock) return;
+    world.cars = world.cars.filter((car) => !car.roadblock);
+    world.peds = world.peds.filter((ped) => !ped.roadblock);
+    game.roadblock = null;
+    game.roadblockCooldown = ROADBLOCK_RESPAWN_SECONDS;
+  }
+
+  function updateRoadblocks(dt) {
+    if (game.roadblockCooldown > 0) game.roadblockCooldown -= dt;
+    if (game.wanted >= ROADBLOCK_MIN_WANTED && !game.roadblock && game.roadblockCooldown <= 0) {
+      spawnRoadblock();
+    } else if (game.wanted < ROADBLOCK_MIN_WANTED && game.roadblock) {
+      clearRoadblock();
+    }
+  }
+
   function updateWanted(dt) {
     const pos = nearestPlayerPos();
     const near = nearestCop(world, pos.x, pos.y);
@@ -509,6 +652,36 @@ export function createGame(seed) {
         world.peds.push(rival);
       }
     }
+    if (def.type === 'race') {
+      // Rosa's lent Comet waits at the start line; three rivals line up behind it.
+      const line = placeApproach(RACE_START_PLACE);
+      const raceCar = makeCar(rng, 'sport', line.x + 80, line.y, 0, 'none');
+      raceCar.color = '#d42a2a';
+      raceCar.speed = 0;
+      world.cars.push(raceCar);
+      game.raceCar = raceCar;
+      // Four checkpoints around the city, then the finish at Rosa's Bar.
+      game.mission.checkpoints = RACE_CHECKPOINT_PLACES.map((place) => {
+        const a = placeApproach(place);
+        return { x: a.x, y: a.y, label: PLACES[place].name };
+      });
+      const finish = placeApproach(RACE_FINISH_PLACE);
+      game.mission.checkpoints.push({ x: finish.x, y: finish.y, label: PLACES[RACE_FINISH_PLACE].name });
+      game.mission.cpIndex = 0;
+      game.mission.total = game.mission.checkpoints.length;
+      game.mission.rivals = [];
+      RACE_RIVALS.forEach((name, i) => {
+        const rival = makeCar(rng, 'sport', line.x - 70 - i * 70, line.y, 0, 'race');
+        rival.color = ['#1f9d55', '#e8e8e8', '#4f7ec9'][i];
+        rival.speed = 0;
+        rival.waiting = true; // they go when the player reaches the line
+        rival.cpIndex = 0;
+        rival.raceTarget = game.mission.checkpoints[0];
+        rival.name = name;
+        world.cars.push(rival);
+        game.mission.rivals.push(rival);
+      });
+    }
     say('ROSA', def.brief);
   }
   game.startMission = startMission;
@@ -516,6 +689,8 @@ export function createGame(seed) {
   function completeMission() {
     const m = game.mission;
     if (!m) return;
+    // Race rivals leave the street when the job is over.
+    world.cars = world.cars.filter((car) => car.driver !== 'race');
     game.cash += m.def.reward;
     popup(`+$${m.def.reward} — ${m.def.title.toUpperCase()} DONE`, '#7be495');
     audio.jingle();
@@ -534,6 +709,7 @@ export function createGame(seed) {
   function failMission(reason) {
     const m = game.mission;
     if (!m) return;
+    world.cars = world.cars.filter((car) => car.driver !== 'race');
     popup(`JOB FAILED — ${reason}`, '#ff8a7a');
     audio.fail();
     game.mission = null;
@@ -613,6 +789,69 @@ export function createGame(seed) {
         }
       } else if (m.step === 'escape' && atTarget) {
         completeMission();
+      }
+    } else if (def.type === 'race') {
+      if (m.step === 'go') {
+        // The race only starts when the player reaches the line.
+        if (atTarget) {
+          m.step = 'racing';
+          m.cpIndex = 0;
+          const first = m.checkpoints[0];
+          m.target = { x: first.x, y: first.y, label: first.label };
+          m.objective = `Checkpoint 1/${m.total} — ${first.label}`;
+          for (const rival of m.rivals) rival.waiting = false;
+          game.missionTimer = def.timeLimit;
+          popup("GO! Beat them to Rosa's Bar!", '#ffd23e');
+          audio.jingle();
+        }
+      } else if (m.step === 'racing') {
+        game.missionTimer -= dt;
+        m.timer = game.missionTimer;
+        if (atTarget) {
+          m.cpIndex += 1;
+          if (m.cpIndex >= m.total) {
+            completeMission();
+            return;
+          }
+          const next = m.checkpoints[m.cpIndex];
+          m.target = { x: next.x, y: next.y, label: next.label };
+          m.objective = `Checkpoint ${m.cpIndex + 1}/${m.total} — ${next.label}`;
+          popup(`Checkpoint ${m.cpIndex}/${m.total - 1}`, '#ffd23e');
+          audio.coin();
+        }
+        // Rivals drive their own checkpoints; one finishing first ends the race.
+        for (const rival of m.rivals) {
+          if (rival.finished) continue;
+          const rt = rival.raceTarget;
+          if (rt && dist(rival.x, rival.y, rt.x, rt.y) < 70) {
+            rival.cpIndex += 1;
+            if (rival.cpIndex >= m.total) {
+              rival.finished = true;
+              failMission(`${rival.name || 'A rival'} beat you to the line.`);
+              return;
+            }
+            rival.raceTarget = m.checkpoints[rival.cpIndex];
+          }
+        }
+        if (game.missionTimer <= 0) failMission('Out of time — the pot went to someone else.');
+      }
+    } else if (def.type === 'getaway') {
+      if (m.step === 'go' && atTarget) {
+        m.step = 'escape';
+        const safe = placeApproach(def.returnPlace);
+        m.target = { x: safe.x, y: safe.y, label: PLACES[def.returnPlace].name };
+        m.objective = def.objectiveReturn;
+        setWanted(3);
+        popup('The crew is in — now lose the cops!', '#ff8a7a');
+        audio.crash();
+        say('ROSA', 'ROSA: Three stars and my crew in the back seat. Shake them before the Safehouse — I mean it.');
+      } else if (m.step === 'escape' && atTarget) {
+        if (game.wanted === 0) {
+          completeMission();
+        } else if (!m.warned) {
+          m.warned = true;
+          popup('Too hot — lose the cops first!', '#ff8a7a');
+        }
       }
     }
   }
@@ -842,6 +1081,7 @@ export function createGame(seed) {
   function busted() {
     game.bustedLoss = loseCash(0.2);
     game.wanted = 0;
+    clearRoadblock();
     world.player.hp = PLAYER.maxHealth;
     world.player.inCar = null;
     world.cars = world.cars.filter((car) => car.driver !== 'cop');
@@ -858,6 +1098,7 @@ export function createGame(seed) {
   function wasted() {
     game.bustedLoss = loseCash(0.2);
     game.wanted = 0;
+    clearRoadblock();
     world.player.hp = PLAYER.maxHealth;
     world.player.inCar = null;
     world.cars = world.cars.filter((car) => car.driver !== 'cop');
@@ -898,6 +1139,11 @@ export function createGame(seed) {
       game.muted = !game.muted;
       audio.setMuted(game.muted);
       popup(game.muted ? 'Sound off (M to unmute)' : 'Sound on', '#ffffff');
+    }
+    if (actions & ACTION_RADIO) {
+      const station = audio.toggleRadio();
+      game.radioStation = station;
+      popup(station ? `Radio — ${station}` : 'Radio off', '#9db8f5');
     }
 
     // Timers.
@@ -1002,6 +1248,7 @@ export function createGame(seed) {
     updateSafehouse(dt);
     updateNearMiss(dt);
     updateWanted(dt);
+    updateRoadblocks(dt);
     updateMission(dt);
 
     // Hurt flash and the siren follow the wanted level.
@@ -1013,6 +1260,8 @@ export function createGame(seed) {
     const driving = p.inCar !== null;
     const speed01 = driving ? clamp(Math.sqrt(p.inCar.vx ** 2 + p.inCar.vy ** 2) / 660, 0, 1) : 0;
     audio.engine(speed01, driving);
+    audio.radioTick();
+    game.radioStation = audio.radioStation();
 
     // Camera follows the player; shake decays.
     const target = nearestPlayerPos();

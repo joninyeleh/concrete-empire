@@ -8,6 +8,7 @@ export const ACTION_CONFIRM = 4;
 export const ACTION_PAUSE = 8;
 export const ACTION_MUTE = 16;
 export const ACTION_BUY = 32; // contextual: buy the showroom car / repair at the garage
+export const ACTION_RADIO = 64; // cycle the in-game radio stations (off → 1 → 2 → off)
 
 const UP = new Set(['ArrowUp', 'KeyW']);
 const DOWN = new Set(['ArrowDown', 'KeyS']);
@@ -21,6 +22,7 @@ const CONFIRM = new Set(['Enter']);
 const PAUSE = new Set(['KeyP', 'Escape']);
 const MUTE = new Set(['KeyM']);
 const BUY = new Set(['KeyB']);
+const RADIO = new Set(['KeyR']);
 
 export function createInput(target) {
   const held = new Set();
@@ -41,6 +43,7 @@ export function createInput(target) {
     else if (PAUSE.has(event.code)) actions |= ACTION_PAUSE;
     else if (MUTE.has(event.code)) actions |= ACTION_MUTE;
     else if (BUY.has(event.code)) actions |= ACTION_BUY;
+    else if (RADIO.has(event.code)) actions |= ACTION_RADIO;
   });
   window.addEventListener('keyup', (event) => {
     held.delete(event.code);
