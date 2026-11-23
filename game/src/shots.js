@@ -1,222 +1,105 @@
-// Screenshot staging behind ?shot=start|play|drive|mission|race|night. Each scene plays the
-// real rules forward from a fresh world under a simple autopilot (steer toward the
-// mission marker, or cruise the road ahead), so the frame is what a short game
-// really looks like — and the same seed always gives the same frame.
+// Concrete Empire — deterministic staged scenes for screenshots.
+// ?shot=start|race|night|mission&seed=1 loads the game straight into a
+// composed moment instead of the title screen.
+import { PLACES, RACE_CPS } from './config.js';
+import { makeCar } from './world.js';
 
-import { STEP, placeApproach, placeCenter, roadLine } from './config.js';
-import { angleDiff, clamp, dist } from './random.js';
-import { makeCar, makePed, randomSidewalkPoint, snapToRoad } from './world.js';
-
-/** Where the autopilot wants to go: the mission marker, or the road ahead. */
-function autopilotTarget(game) {
-  const p = game.world.player;
-  const pos = p.inCar ? { x: p.inCar.x, y: p.inCar.y } : { x: p.x, y: p.y };
-  if (game.mission && game.mission.target) {
-    const t = game.mission.target;
-    if (dist(pos.x, pos.y, t.x, t.y) < 120) return null;
-    const dx = t.x - pos.x;
-    const dy = t.y - pos.y;
-    const d = Math.sqrt(dx * dx + dy * dy) || 1;
-    return snapToRoad(pos.x + (dx / d) * 420, pos.y + (dy / d) * 420);
-  }
-  const heading = p.inCar ? p.inCar.angle : p.angle;
-  return snapToRoad(pos.x + Math.cos(heading) * 420, pos.y + Math.sin(heading) * 420);
-}
-
-/** Synthetic input for a staged scene: drive or walk toward the autopilot target. */
-export function autopilotInput(game) {
-  const p = game.world.player;
-  const target = autopilotTarget(game);
-  // Stuck detection: if the player barely moved, sidestep for a moment.
-  const st = game.autoState || (game.autoState = { lx: p.x, ly: p.y, stuck: 0, detour: 0, dir: 1 });
-  const moved = dist(p.x, p.y, st.lx, st.ly);
-  st.lx = p.x;
-  st.ly = p.y;
-  if (moved < 1.5) st.stuck += STEP;
-  else st.stuck = 0;
-  if (st.stuck > 0.6) {
-    st.detour = 0.8;
-    st.dir = -st.dir;
-    st.stuck = 0;
-  }
-  let move = { x: 0, y: 0 };
-  if (target) {
-    if (p.inCar) {
-      const desired = Math.atan2(target.y - p.inCar.y, target.x - p.inCar.x);
-      const turn = angleDiff(p.inCar.angle, desired);
-      move = { x: clamp(turn * 2, -1, 1), y: turn > 2.4 || turn < -2.4 ? 0.4 : -1 };
-    } else {
-      const dx = target.x - p.x;
-      const dy = target.y - p.y;
-      const d = Math.sqrt(dx * dx + dy * dy) || 1;
-      let mx = dx / d;
-      let my = dy / d;
-      if (st.detour > 0) {
-        st.detour -= STEP;
-        const px = -my * st.dir;
-        const py = mx * st.dir;
-        mx = px;
-        my = py;
-      }
-      move = { x: mx, y: my };
-    }
-  }
-  return {
-    move: () => move,
-    sprinting: () => false,
-    handbrake: () => false,
-    takeActions: () => 0,
-  };
-}
-
-/** Run the game forward `seconds` under the autopilot. */
-function simulate(game, seconds) {
-  const steps = Math.round(seconds / STEP);
-  for (let i = 0; i < steps; i += 1) {
-    game.stepPlay(STEP, autopilotInput(game));
-    if (game.screen !== 'play') break;
-  }
-}
-
-function extraPedsNear(game, x, y, count) {
-  const rng = game.rng;
-  for (let i = 0; i < count; i += 1) {
-    let point = randomSidewalkPoint(rng);
-    let tries = 0;
-    while (dist(point.x, point.y, x, y) > 260 && tries < 12) {
-      point = randomSidewalkPoint(rng);
-      tries += 1;
-    }
-    game.world.peds.push(makePed(rng, point.x, point.y, 'citizen'));
-  }
-}
-
-function putPlayerInCar(game, car) {
-  const p = game.world.player;
-  car.driver = 'player';
-  p.inCar = car;
-  p.x = car.x;
-  p.y = car.y;
-  p.angle = car.angle;
-}
-
-/**
- * Set `game` to the named scene (start, play, drive, mission, race or night)
- * and leave it playing under the autopilot, so the screenshot catches a live moment.
- */
-export function stageShot(name, game) {
-  const rng = game.rng;
-  game.reset(game.seed);
-  const world = game.world;
+export function applyShot(game, name) {
+  const { world } = game;
   const p = world.player;
-
-  if (name !== 'play' && name !== 'drive' && name !== 'mission' && name !== 'race' && name !== 'night') {
-    // Title: four seconds of the living city behind the neon logo, deep at night.
-    game.time = 170;
-    world.time = 170;
-    game.screen = 'title';
-    for (let i = 0; i < 4 / STEP; i += 1) game.stepTitle(STEP);
-    return;
-  }
-
   game.screen = 'play';
-  game.showControls = false;
-  game.cash = 1240;
+  game.dialogue = null;
 
-  if (name === 'play') {
-    // On foot on a busy Downtown street, job one already on the phone.
-    p.x = roadLine(3);
-    p.y = roadLine(2) + 30;
-    p.angle = 0;
-    extraPedsNear(game, p.x, p.y, 6);
+  if (name === 'start') {
+    // Vic on foot outside Rosa's bar at dusk, first job on the board.
+    game.time = 30;
+    p.x = PLACES.spawn.x;
+    p.y = PLACES.spawn.y;
+    p.angle = 0.4;
     game.startMission(0);
-    game.missionDelay = 0;
-    simulate(game, 4.5);
-    return;
-  }
-
-  if (name === 'drive') {
-    // Behind the wheel on the long east–west road through Downtown, two stars
-    // up and two cop cars closing in from behind.
-    const car = makeCar(rng, 'sport', roadLine(1), roadLine(3), 0, 'none');
-    car.color = '#d42a2a';
+    const car = makeCar('sedan', p.x + 90, p.y + 50, 'none', 0.3);
     world.cars.push(car);
-    putPlayerInCar(game, car);
-    for (let i = 0; i < 2; i += 1) {
-      const cop = makeCar(rng, 'police', car.x - 480 - i * 150, roadLine(3), 0, 'cop');
-      world.cars.push(cop);
-    }
-    game.setWanted(2);
-    simulate(game, 2.0);
     return;
   }
 
   if (name === 'race') {
-    // Midnight Grand Prix, mid-race: Vic in Rosa's lent Comet on the start line,
-    // three rivals ahead, the first checkpoint lit. Staged at night.
-    game.time = 150;
-    world.time = 150;
+    // Mid-race: Vic's race car pulling away from the pack at dusk.
+    game.time = 100;
+    game.missionsDone = ['pickup', 'hotwheels', 'drop', 'turf', 'score'];
     game.startMission(5);
-    game.missionDelay = 0;
-    // No briefing box in the shot: the race should read, not the text.
+    const m = game.mission;
+    m.step = 'racing';
+    m.timed = true;
+    game.missionTimer = 135;
+    m.cpIndex = 0;
+    m.target = { ...RACE_CPS[0] };
+    m.objective = 'Race! 4 checkpoints, then the finish';
+    const car = game.raceCar;
+    car.x = 1900;
+    car.y = 880;
+    car.angle = 0;
+    car.vx = 300;
+    car.vy = 0;
+    p.x = car.x;
+    p.y = car.y;
+    p.angle = 0;
+    const spots = [
+      { x: 1720, y: 850 }, { x: 1660, y: 905 }, { x: 1760, y: 925 },
+    ];
+    m.rivals.forEach((r, i) => {
+      r.waiting = false;
+      r.cpIndex = 0;
+      r.x = spots[i].x;
+      r.y = spots[i].y;
+      r.angle = 0;
+      r.vx = 250;
+      r.vy = 0;
+    });
     game.dialogue = null;
-    game.dialogueQueue = [];
-    putPlayerInCar(game, game.raceCar);
-    // The race is already on: the player is on the line, so the flag drops now.
-    game.mission.step = 'racing';
-    game.mission.cpIndex = 0;
-    const first = game.mission.checkpoints[0];
-    game.mission.target = { x: first.x, y: first.y, label: first.label };
-    game.mission.objective = `Checkpoint 1/${game.mission.total} — ${first.label}`;
-    for (const rival of game.mission.rivals) rival.waiting = false;
-    game.missionTimer = 150;
-    simulate(game, 2.0);
     return;
   }
 
   if (name === 'night') {
-    // Night drive through Downtown: headlights, streetlights, two stars up and
-    // two cop cars closing in from behind.
-    game.time = 170;
-    world.time = 170;
-    const car = makeCar(rng, 'sport', roadLine(1), roadLine(3), 0, 'none');
-    car.color = '#d42a2a';
+    // Deep night in Downtown: neon, headlights, a timed delivery running.
+    game.time = 180;
+    game.missionsDone = ['pickup', 'hotwheels'];
+    game.startMission(2);
+    const car = makeCar('sedan', 1700, 1200, 'player', 0);
+    car.vx = 230;
     world.cars.push(car);
-    putPlayerInCar(game, car);
-    for (let i = 0; i < 2; i += 1) {
-      const cop = makeCar(rng, 'police', car.x - 480 - i * 150, roadLine(3), 0, 'cop');
-      world.cars.push(cop);
-    }
-    game.setWanted(2);
-    simulate(game, 2.0);
+    p.inCar = car;
+    p.x = car.x;
+    p.y = car.y;
+    p.angle = 0;
+    game.dialogue = null;
     return;
   }
 
-  // Mission: mid-heist at Empire Bank — Vic is standing in the vault marker,
-  // the crack is almost done, and the objective is on screen. Staged at night.
-  game.time = 170;
-  world.time = 170;
-  game.startMission(4);
-  game.missionDelay = 0;
-  const bank = placeApproach('bank');
-  game.mission.step = 'hold';
-  game.mission.objective = 'Crack the vault — stay in the marker';
-  game.mission.holdTimer = 0.5;
-  p.x = bank.x;
-  p.y = bank.y;
-  p.angle = -Math.PI / 2;
-  extraPedsNear(game, p.x, p.y, 3);
-  // The heist has already drawn attention: three stars, and a cop car closing
-  // in from down the road.
-  game.setWanted(3);
-  const cop = makeCar(rng, 'police', bank.x - 800, roadLine(3), 0, 'cop');
-  world.cars.push(cop);
-  // A little life on the street: two cars passing the bank.
-  for (let i = 0; i < 2; i += 1) {
-    const pass = makeCar(rng, i === 0 ? 'taxi' : 'sedan', bank.x - 320 - i * 260, roadLine(3), 0, 'traffic');
-    pass.target = { x: bank.x + 700, y: roadLine(3) };
-    pass.dirIndex = 0;
-    world.cars.push(pass);
+  if (name === 'mission') {
+    // The Big Score, mid-escape: three stars, PD cruisers closing in.
+    game.time = 150;
+    game.missionsDone = ['pickup', 'hotwheels', 'drop', 'turf'];
+    game.startMission(4);
+    const m = game.mission;
+    m.step = 'escape';
+    m.crackT = 0;
+    game.setWanted(3);
+    m.target = { x: PLACES.safehouse.x, y: PLACES.safehouse.y, label: PLACES.safehouse.label };
+    m.objective = 'Escape to the safehouse!';
+    const car = makeCar('sports', 2000, 1200, 'player', 0);
+    car.vx = 200;
+    car.vy = 0;
+    world.cars.push(car);
+    p.inCar = car;
+    p.x = car.x;
+    p.y = car.y;
+    p.angle = 0;
+    for (const [cx, cy] of [[1620, 1150], [1680, 1290]]) {
+      const cop = makeCar('police', cx, cy, 'police', Math.atan2(p.y - cy, p.x - cx));
+      cop.vx = 200;
+      world.cars.push(cop);
+      world.police.push({ car: cop, ped: null, contact: 0 });
+    }
+    game.dialogue = null;
   }
-  simulate(game, 0.6);
 }

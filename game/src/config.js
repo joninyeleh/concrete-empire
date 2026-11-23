@@ -1,309 +1,117 @@
-// Concrete Empire — tuning, city layout, palette and mission definitions.
-// All numbers are in world pixels; the view is 1280x720 and the camera follows the player.
+// Concrete Empire — tuning, city layout, districts, missions, economy.
+// All numbers are the game's own design; nothing here is copied from any
+// other game's data.
+export const SAVE_KEY = 'concrete-empire-save-v1';
+export const START_CASH = 40;
 
-import { smoothstep } from './random.js';
+export const CITY = { W: 3200, H: 2200 };
+export const ROADS_X = [240, 560, 880, 1200, 1520, 1840, 2160, 2480, 2800];
+export const ROADS_Y = [240, 560, 880, 1200, 1520, 1840];
+export const ROAD_W = 64;
 
-export const VIEW = { w: 1280, h: 720 };
-export const STEP = 1 / 60;
+export const DISTRICTS = [
+  { name: 'Old Town', x0: 0, y0: 0, x1: 1000, y1: 1000, ground: '#8a7f6a', roof: '#6e5f4c', neon: false },
+  { name: 'Riverside Park', x0: 2000, y0: 0, x1: 3200, y1: 1000, ground: '#4d7a45', roof: '#3c6336', neon: false },
+  { name: 'Downtown', x0: 1000, y0: 700, x1: 2100, y1: 1500, ground: '#5d5a68', roof: '#3f3d4a', neon: true },
+  { name: 'Harbor', x0: 0, y0: 1500, x1: 1000, y1: 2200, ground: '#6b6f66', roof: '#54584e', neon: false },
+  { name: 'Empire Plaza', x0: 2100, y0: 1000, x1: 3200, y1: 2200, ground: '#7a7268', roof: '#5d564c', neon: false },
+  { name: 'Suburbs', x0: 1000, y0: 1500, x1: 2100, y1: 2200, ground: '#7d8a5f', roof: '#66744c', neon: false },
+];
 
-// ---- Day / night -----------------------------------------------------------
-// One slow cycle: dusk at t=0, deep night halfway through, dusk again at the end.
-// The renderer reads this every frame for the wash, streetlights and neon.
-export const NIGHT_CYCLE_SECONDS = 360;
-/** 0 = dusk, 1 = deep night, for a given game time in seconds. */
-export function nightLevel(time) {
-  const phase = (time % NIGHT_CYCLE_SECONDS) / NIGHT_CYCLE_SECONDS;
-  return smoothstep(0, 0.5, phase) * (1 - smoothstep(0.5, 1, phase));
-}
-
-// ---- City grid -------------------------------------------------------------
-export const BLOCK = 320; // side of one city block, in pixels
-export const ROAD = 96; // width of one road
-export const COLS = 6; // blocks across
-export const ROWS = 6; // blocks down
-export const WORLD_W = COLS * BLOCK + (COLS + 1) * ROAD; // 2592
-export const WORLD_H = ROWS * BLOCK + (ROWS + 1) * ROAD; // 2592
-export const GRID = BLOCK + ROAD; // distance between neighbouring road centrelines
-
-/** Centreline coordinate of road `i` (0..COLS for vertical roads, 0..ROWS for horizontal). */
-export function roadLine(i) {
-  return ROAD / 2 + i * GRID;
-}
-/** Which block column/row a world point sits in, or null when the point is on a road. */
-export function blockAt(x, y) {
-  const col = Math.floor((x - ROAD) / GRID);
-  const row = Math.floor((y - ROAD) / GRID);
-  if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return null;
-  const lx = x - (ROAD + col * GRID);
-  const ly = y - (ROAD + row * GRID);
-  if (lx < 0 || lx >= BLOCK || ly < 0 || ly >= BLOCK) return null;
-  return { col, row };
-}
-/** True when the point is on asphalt (a road or an intersection). */
-export function isRoad(x, y) {
-  return blockAt(x, y) === null && x >= 0 && x < WORLD_W && y >= 0 && y < WORLD_H;
-}
-
-// ---- Districts -------------------------------------------------------------
-export function districtAt(col, row) {
-  if (col >= 4 && row <= 1) return 'harbor';
-  if (col <= 1 && row <= 2) return 'oldtown';
-  if ((col === 2 && row <= 1) || (col === 2 && row === 4)) return 'park';
-  if (col >= 2 && col <= 3 && row <= 2) return 'downtown';
-  if (col === 2 && row === 2) return 'plaza';
-  return 'suburb';
-}
-export const DISTRICT_NAMES = {
-  downtown: 'Downtown',
-  oldtown: 'Old Town',
-  harbor: 'Harbor',
-  park: 'Riverside Park',
-  plaza: 'Empire Plaza',
-  suburb: 'The Suburbs',
-};
-
-// Named places, by block. The missions and the save spawn use these.
+// Named places. Coordinates sit on or next to roads so every target is
+// reachable by car or on foot.
 export const PLACES = {
-  rosasBar: { col: 1, row: 3, name: "Rosa's Bar" },
-  harborPickup: { col: 5, row: 0, name: 'Harbor Dock 7' },
-  sportsCar: { col: 3, row: 1, name: 'Downtown Showroom' },
-  bank: { col: 3, row: 2, name: 'Empire Bank' },
-  safehouse: { col: 0, row: 5, name: 'Safehouse' },
-  park: { col: 2, row: 1, name: 'Riverside Park' },
-  garage: { col: 4, row: 4, name: 'Greasy Wrench Garage' },
+  rosa: { x: 1520, y: 880, label: "Rosa's Bar" },
+  spawn: { x: 1500, y: 880 },
+  dock: { x: 400, y: 1900, label: 'Harbor Dock 7' },
+  garage: { x: 600, y: 600, label: 'Greasy Wrench Garage' },
+  bank: { x: 2400, y: 1200, label: 'Empire Bank' },
+  safehouse: { x: 2700, y: 1900, label: 'Safehouse' },
+  park: { x: 2500, y: 500, label: 'Riverside Park' },
+  hospital: { x: 1200, y: 1900, label: "St. Mary's Hospital" },
+  cometSpot: { x: 450, y: 450 },
+  vanSpot: { x: 640, y: 640 },
+  bikeSpot: { x: 2400, y: 560 },
+  raceStart: { x: 1434, y: 880 },
+  dropTarget: { x: 2800, y: 1900, label: 'Drop-off Point' },
 };
 
-// ---- Identity: the city, the fixer, the hook --------------------------------
-export const CITY_NAME = 'Velmora';
-export const PLAYER_NAME = 'Vic';
-export const STORY = [
-  'Vic rolled into Velmora with $40 and a busted sedan.',
-  "Rosa runs the streets from her bar. Do her jobs,",
-  'earn your empire — one score at a time.',
+// Street-race route: four checkpoints around the city, then back to the
+// start line for the finish.
+export const RACE_CPS = [
+  { x: 2480, y: 560, label: 'Checkpoint 1' },
+  { x: 2800, y: 1520, label: 'Checkpoint 2' },
+  { x: 1200, y: 1840, label: 'Checkpoint 3' },
+  { x: 560, y: 1200, label: 'Checkpoint 4' },
+  { x: 1434, y: 880, label: 'Finish Line' },
 ];
 
-// ---- Pickups & cash that matters --------------------------------------------
-export const PICKUPS = {
-  startCount: 14,
-  maxCount: 14,
-  respawnSeconds: 45,
-  cashMin: 50,
-  cashMax: 150,
-  healthHeal: 40,
-  armorAmount: 60, // damage absorbed before health takes a hit
-  batSeconds: 90, // a picked-up bat doubles punch damage this long
-  batDamage: 2,
-  repairCost: 150,
-  sportsCarPrice: 800,
-};
-export const NEAR_MISS = { reward: 10, minSpeed: 220, range: 46, cooldown: 2 };
-export const CAR_MAX_HP = 100;
-/** World centre of a named place's block. */
-export function placeCenter(key) {
-  const p = PLACES[key];
-  return { x: ROAD + p.col * GRID + BLOCK / 2, y: ROAD + p.row * GRID + BLOCK / 2 };
-}
-/** A reachable point for a named place: the road just south of its block, at the block's centre x. */
-export function placeApproach(key) {
-  const p = PLACES[key];
-  return { x: ROAD + p.col * GRID + BLOCK / 2, y: roadLine(p.row + 1) };
-}
+export const PRICES = { repair: 150, comet: 800, safehouse: 1200 };
+export const REPAIR_COST = 150;
+export const COMET_COST = 800;
+export const SAFEHOUSE_COST = 1200;
 
-// ---- Palette ---------------------------------------------------------------
-export const COLORS = {
-  ground: '#6f7f5e',
-  sidewalk: '#8f8d82',
-  road: '#2e3138',
-  roadLine: '#d9c25a',
-  crosswalk: '#c9c7bd',
-  parkGrass: '#4d7a45',
-  tree: '#2e5a30',
-  treeTop: '#3f7a3a',
-  plazaStone: '#a49e90',
-  player: '#ffd23e',
-  playerOutline: '#1c1a14',
-  ped: ['#e06a5a', '#5aa3e0', '#7ac74f', '#e0a35a', '#b06ad4', '#e05a9a', '#5ad4c0'],
-  cop: '#2b3a55',
-  building: {
-    downtown: ['#4d5f7d', '#5d6f8d', '#46586e', '#6b7d9c'],
-    oldtown: ['#8a6a4e', '#7d5f49', '#96714f'],
-    harbor: ['#5e6e62', '#6e7d6a', '#55655e'],
-    suburb: ['#a89880', '#b3a284', '#9c8c74'],
-    park: [],
-    plaza: [],
-  },
-  roof: '#3a3f47',
-  car: {
-    sedan: ['#c94f4f', '#4f7ec9', '#c9c94f', '#7a7a80', '#c98a4f'],
-    taxi: ['#e8c33a'],
-    sport: ['#d42a2a', '#1f9d55', '#e8e8e8'],
-    truck: ['#8a8f96'],
-    van: ['#7a7a80', '#5a6e8a', '#8a7a5a'],
-    bike: ['#d42a2a', '#e8e8e8', '#1f9d55'],
-    police: ['#20242c'],
-  },
-  policeLightA: '#ff2e2e',
-  policeLightB: '#2e6bff',
-  marker: '#ffd23e',
-  markerRing: '#ffffff',
-  neon: ['#ff2ea6', '#00e5ff', '#ffe600', '#ff6b00', '#7CFC00'],
-  duskSky: '#1c2030', // drawn over the city at dusk: a translucent violet wash
-  windowLit: '#ffd98a',
-  windowDark: '#2a3242',
+// Vehicle handling. max = top speed in px/s, accel = px/s^2,
+// turn = radians per second at full speed.
+export const VEHICLES = {
+  sedan: { max: 300, accel: 260, turn: 2.7, color: '#c0392b', name: 'Sedan' },
+  sports: { max: 385, accel: 340, turn: 3.1, color: '#f1c40f', name: 'Comet GT' },
+  van: { max: 215, accel: 200, turn: 2.1, color: '#7f8c8d', name: 'Van' },
+  bike: { max: 405, accel: 380, turn: 3.7, color: '#8e44ad', name: 'Bike' },
+  police: { max: 345, accel: 320, turn: 3.1, color: '#2c4a6b', name: 'PD Cruiser' },
+  race: { max: 400, accel: 360, turn: 3.3, color: '#e74c3c', name: 'Race Car' },
 };
 
-// ---- Player ----------------------------------------------------------------
-export const PLAYER = {
-  radius: 13,
-  walk: 175,
-  sprint: 268,
-  punchRange: 36,
-  punchArc: 1.1, // radians either side of facing
-  punchDamage: 25,
-  punchCooldown: 0.38,
-  maxHealth: 100,
-};
+export const ON_FOOT_SPEED = 175;
+export const SPRINT_SPEED = 265;
+export const COP_FOOT_SPEED = 212;
+export const TRAFFIC_SPEED = 135;
+export const RIVAL_SPEED = 235;
 
-// ---- Cars ------------------------------------------------------------------
-export const CAR = {
-  length: 46,
-  width: 22,
-  accel: 430,
-  brake: 640,
-  reverseMax: 170,
-  steer: 2.7, // radians per second at full lock, scaled by speed
-  grip: 5.2, // how fast sideways velocity bleeds off (lower = more drift)
-  handbrakeGrip: 1.4,
-  maxSpeed: { sedan: 520, taxi: 500, sport: 660, truck: 400, van: 430, bike: 720, police: 610 },
-  damageOnHit: 14,
-};
-
-/** Per-kind driving feel. The van is slow and planted; the bike is quick and twitchy. */
-export const CAR_STATS = {
-  sedan: { accel: 430, maxSpeed: 520, grip: 5.2, steer: 2.7, length: 46, width: 22 },
-  taxi: { accel: 430, maxSpeed: 500, grip: 5.2, steer: 2.7, length: 46, width: 22 },
-  sport: { accel: 470, maxSpeed: 660, grip: 5.6, steer: 2.9, length: 46, width: 22 },
-  truck: { accel: 360, maxSpeed: 400, grip: 5.6, steer: 2.2, length: 54, width: 24 },
-  van: { accel: 330, maxSpeed: 430, grip: 6.0, steer: 2.2, length: 56, width: 24 },
-  bike: { accel: 560, maxSpeed: 720, grip: 7.5, steer: 3.6, length: 34, width: 14 },
-  police: { accel: 450, maxSpeed: 610, grip: 5.4, steer: 2.8, length: 46, width: 22 },
-};
-/** Drawn body size for a car kind. */
-export function carDims(kind) {
-  const s = CAR_STATS[kind] || CAR_STATS.sedan;
-  return { length: s.length, width: s.width };
-}
-
-// ---- Traffic & pedestrians -------------------------------------------------
-export const TRAFFIC_COUNT = 14;
-export const PED_COUNT = 26;
-export const TRAFFIC_SPEED = 150;
-export const PED_SPEED = 62;
-
-// ---- Wanted level ----------------------------------------------------------
-export const WANTED_MAX = 5;
-export const WANTED_UNSEEN_SECONDS = 10; // unseen this long before stars start dropping
-export const WANTED_DECAY_SECONDS = 6; // one star per this many unseen seconds
-export const BUSTED_HOLD_SECONDS = 1.2; // a cop must hold the player this long to bust them
-export const SIGHT_RANGE = 380; // cops and witnesses notice crimes inside this range
-
-// ---- Police roadblocks -----------------------------------------------------
-export const ROADBLOCK_MIN_WANTED = 4; // roadblocks appear at this many stars
-export const ROADBLOCK_AHEAD = 520; // how far ahead of the player the block is set
-export const ROADBLOCK_RESPAWN_SECONDS = 20; // wait before a new block after one clears
-
-// ---- In-game radio ---------------------------------------------------------
-// Two stations, both synthesized live with WebAudio oscillators — no audio files.
-export const RADIO_STATIONS = [
-  { name: 'NEON DRIVE 104.7', kind: 'synthwave' },
-  { name: 'VELMORA LO-FI 88.3', kind: 'lofi' },
-];
-
-// ---- Street race -----------------------------------------------------------
-// Start line at the Downtown showroom, then four checkpoints and a finish at Rosa's.
-export const RACE_START_PLACE = 'sportsCar';
-export const RACE_CHECKPOINT_PLACES = ['harborPickup', 'bank', 'safehouse', 'park'];
-export const RACE_FINISH_PLACE = 'rosasBar';
-export const RACE_TIME_LIMIT = 150;
-export const RACE_RIVAL_SPEED = 0.88; // rivals drive at 88% of sport top speed
-export const RACE_RIVALS = ['Rico', 'Dana', 'Mo'];
-
-// ---- Missions --------------------------------------------------------------
+// Mission definitions, in the order Rosa hands them out.
 export const MISSIONS = [
   {
-    id: 'pickup',
-    title: 'The Pickup',
-    reward: 300,
-    type: 'collect',
-    place: 'harborPickup',
-    returnPlace: 'rosasBar',
-    brief: "ROSA: First job, kid. A package is waiting at Harbor Dock 7. Bring it back to my bar. No heroes — just walk in, grab it, walk out.",
-    objective: 'Pick up the package at Harbor Dock 7',
-    objectiveReturn: "Bring the package back to Rosa's Bar",
+    id: 'pickup', name: 'The Pickup', reward: 300,
+    intro: "Rosa: Vic, baby. A package is sitting at Harbor Dock 7. Bring it back to me and don't get curious.",
+    outro: 'Rosa: Clean work. The empire starts with small favors, Vic.',
   },
   {
-    id: 'hotwheels',
-    title: 'Hot Wheels',
-    reward: 500,
-    type: 'steal',
-    place: 'sportsCar',
-    brief: 'ROSA: A red Comet GT is parked outside the Downtown showroom. Take it. The owner will call the cops — lose them and the car is yours.',
-    objective: 'Steal the red Comet GT',
-    objectiveReturn: 'Lose the heat — get your wanted level to zero',
+    id: 'hotwheels', name: 'Hot Wheels', reward: 500,
+    intro: "Rosa: I need a Comet GT. There is one parked in Old Town — take it, and bring it to the Greasy Wrench with no heat on you.",
+    outro: 'Rosa: She purrs, huh? Keep her warm for me.',
   },
   {
-    id: 'drop',
-    title: 'The Drop',
-    reward: 700,
-    type: 'timed',
-    place: 'safehouse',
-    timeLimit: 90,
-    brief: 'ROSA: Ninety seconds. A buyer is waiting at the Safehouse and he does not wait. Drive like the whole city owes you money.',
-    objective: 'Reach the Safehouse before the timer runs out',
+    id: 'drop', name: 'The Drop', reward: 600,
+    intro: 'Rosa: Ninety seconds. A package, a drop-off on the far side of town. Drive like the rent is due.',
+    outro: 'Rosa: On time. The client is happy, which means I am happy.',
   },
   {
-    id: 'turf',
-    title: 'Turf War',
-    reward: 900,
-    type: 'fight',
-    place: 'park',
-    rivals: 4,
-    brief: 'ROSA: The Vipers think Riverside Park is theirs. It is not. Go remind them — fists only, no noise. Four of them, then the park is ours.',
-    objective: 'Deal with the 4 Vipers in Riverside Park',
+    id: 'turf', name: 'Turf War', reward: 700,
+    intro: 'Rosa: The Riverside crew thinks the park is theirs. Go remind them whose town this is. Fists work. A bat works better.',
+    outro: 'Rosa: The park is ours again. They will think twice next time.',
   },
   {
-    id: 'score',
-    title: 'The Big Score',
-    reward: 2000,
-    type: 'heist',
-    place: 'bank',
-    returnPlace: 'safehouse',
-    holdSeconds: 5,
-    brief: 'ROSA: Last one. Empire Bank, the vault, five seconds of nerve. Then every cop in the city will want you — get to the Safehouse and we are rich.',
-    objective: 'Reach Empire Bank and crack the vault',
-    objectiveReturn: 'Escape to the Safehouse with the money',
+    id: 'score', name: 'The Big Score', reward: 1500,
+    intro: 'Rosa: Empire Bank. Walk in, crack the vault, walk out rich. The whole PD will be on you — get to the safehouse.',
+    outro: 'Rosa: Look at you. A hundred and fifty grand richer and still breathing.',
   },
   {
-    id: 'streetrace',
-    title: 'Midnight Grand Prix',
-    reward: 1200,
-    type: 'race',
-    place: 'sportsCar',
-    timeLimit: RACE_TIME_LIMIT,
-    brief: 'ROSA: Rico, Dana and Mo are racing the whole city tonight and the pot is fat. I lent you a Comet at the showroom. Get to the start line, then beat them through four checkpoints to my bar. Lose and you walk home.',
-    objective: 'Get to the start line — Downtown Showroom',
+    id: 'streetrace', name: 'Midnight Grand Prix', reward: 1200,
+    intro: 'Rosa: Midnight race, four checkpoints, three rivals who think they own these streets. Win it and the town talks about you.',
+    outro: 'Rosa: Champion of Velmora! The streets are yours tonight.',
   },
   {
-    id: 'getaway',
-    title: 'Getaway Driver',
-    reward: 1500,
-    type: 'getaway',
-    place: 'garage',
-    returnPlace: 'safehouse',
-    brief: 'ROSA: My crew is holed up at the Greasy Wrench Garage and the PD is already circling. Pick them up, then shake three stars and bring them to the Safehouse. Do not bring the cops to my door — lose them first.',
-    objective: "Pick up Rosa's crew at the Greasy Wrench Garage",
-    objectiveReturn: 'Lose the heat, then reach the Safehouse',
+    id: 'getaway', name: 'Getaway Driver', reward: 1500,
+    intro: "Rosa: My crew is waiting at the garage and the PD is already circling. Pick them up, shake three stars, and bring it home clean.",
+    outro: 'Rosa: That was beautiful driving, Vic. The empire is real now.',
   },
 ];
 
-export const SAVE_KEY = 'concrete-empire-save-v1';
+export const PICKUP_DEFS = [
+  { kind: 'cash', color: '#2ecc71', label: '$' },
+  { kind: 'health', color: '#e74c3c', label: '+' },
+  { kind: 'armor', color: '#3498db', label: 'A' },
+  { kind: 'bat', color: '#d35400', label: 'B' },
+];
+
+export const RADIO_STATIONS = ['NEON DRIVE 104.7', 'VELMORA LO-FI 88.3'];
